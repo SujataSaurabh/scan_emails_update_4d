@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import requests
 from requests.exceptions import RequestException
 import logging
-import json
+import json 
 
 # Configure logging
 logging.basicConfig(
@@ -28,6 +28,10 @@ If the User Name is found and same in the email, the script will insert the alsi
 If the alsid is not found, the script will log the email body and the alsid and User Name.
 
 '''
+# load environment variables from .env file
+load_dotenv()
+# decode email subject from bytes to string
+# This function decodes the email subject from bytes to a string, handling different encodings.
 def decode_email_subject(subject):
     """Decode email subject from bytes to string."""
     decoded_parts = []
@@ -102,9 +106,9 @@ def scan_emails():
     # Load environment variables
     load_dotenv()
     
-    # Email credentials
-    email_user = "sujatagoswami@lbl.gov"
-    email_password = os.getenv('EMAIL_PASSWORD_LBL')  # Store your password in .env file
+    # Email credentials- fetch from environment variables
+    email_user = os.getenv('EMAIL_USER')
+    email_password = os.getenv('EMAIL_PASSWORD')  
     
     # Connect to the IMAP server
     imap_server = "imap.gmail.com"  # Updated to Google's IMAP server
@@ -155,8 +159,14 @@ def scan_emails():
             recipient_email = extract_recipient_email(email_message)
             if recipient_email:
                person_data=  fetch_person_details_from_api(recipient_email)
-            
-            if datetime.strptime(person_data["datelastbnlidupdate"], "%Y-%m-%d").date() == today:
+
+            datelastbnlidupdate = person_data.get("datelastbnlidupdate")
+            if not datelastbnlidupdate:
+                datelastbnlidupdate = "1960-01-01" # Set to minimum date if not found
+        
+        
+            # Check if the date received is same as found in the database
+            if datetime.strptime(datelastbnlidupdate, "%Y-%m-%d").date() == today:
                 logging.info(f"ALS ID {person_data['alsid']} already has LBNL ID {person_data['LBNLID']} for {person_data['FirstName']} {person_data['LastName']} on {date}")
                 continue
             elif person_data['OrgEmail'] == recipient_email and person_data['FirstName'] == user_name.split()[0] and person_data['LastName'] == user_name.split()[-1]:
@@ -242,33 +252,31 @@ def fetch_person_details_from_api(email):
     Fetch person details from the ALS API using the email address.
     Returns a dictionary with person details or None if the request fails.
     """
-    try:
         # Construct API URL
-        api_url = f"https://alsusweb3.lbl.gov/ALSGetPerson/?em={email}"
-        print(f"Fetching person details from API: {api_url}")
-        logging.info(f"Fetching person details from API: {api_url}")
+        # fetch api_url from environment variable
+
+    if not email:
+        logging.error("Email is empty. Cannot fetch person details.")
+        return None
+    api_url = os.getenv('prod_get_person') + f"{email}"
+    if not api_url:
+        logging.error("API URL is not set in environment variables.")
+        return None
+    print(f"Fetching person details from API: {api_url}")
+    logging.info(f"Fetching person details from API: {api_url}")
+    
+    # Make GET request to API
+    response = requests.get(api_url, timeout=10)  # 10 second timeout
+    
+    # Check if request was successful
+    if response.status_code == 200:
+        person_data = response.json()  # Parse JSON response
+        logging.info(f"Successfully retrieved person details for email: {email}")
+        return person_data
+    else:
+        logging.error(f"API request failed with status code: {response.status_code}")
+        return None
         
-        # Make GET request to API
-        response = requests.get(api_url, timeout=10)  # 10 second timeout
-        
-        # Check if request was successful
-        if response.status_code == 200:
-            person_data = response.json()  # Parse JSON response
-            logging.info(f"Successfully retrieved person details for email: {email}")
-            return person_data
-        else:
-            logging.error(f"API request failed with status code: {response.status_code}")
-            return None
-            
-    except RequestException as e:
-        logging.error(f"Error making API request: {str(e)}")
-        return None
-    except ValueError as e:  # JSON parsing error
-        logging.error(f"Error parsing API response: {str(e)}")
-        return None
-    except Exception as e:
-        logging.error(f"Unexpected error fetching person details: {str(e)}")
-        return None
 # 
 def insert_lbnlid_into_db_(alsid, lbnlid, date):
     """
@@ -284,13 +292,17 @@ def insert_lbnlid_into_db_(alsid, lbnlid, date):
     """
     try:
         # API endpoint
-        api_url = "https://alsusweb3.lbl.gov/UPDLbnlid"
-        
+        api_url = os.getenv('prod_update_lbnlid')        
+        if not api_url:
+            logging.error("API URL is not set in environment variables.")
+            return False
         security_token = os.getenv('4D_SECURITY_TOKEN')
+        if not security_token:
+            logging.error("4D Security Token is not set in environment variables.")
+            return False
         # Prepare the request data
         data = {"alsid": str(alsid), "lbnlid": str(lbnlid), "date": str(date), "securitytoken": str(security_token)}
-        
-        
+        logging.info(f"Preparing to insert ALS ID {alsid} and LBNL ID {lbnlid} into the database.")
         # Set up headers for JSON request
         headers = {
             'Content-Type': 'application/json',
@@ -338,6 +350,20 @@ def test_insert_lbnlid_into_db():
     else:
         print(f"Failed to insert ALS ID {alsid} and LBNL ID {lbnlid} into the database.")
 
+def send_notification_email(subject, body, to_email, from_email, smtp_server="smtp.lbl.gov"):
+    import smtplib
+    from email.mime.text import MIMEText
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = to_email
+    try:
+        with smtplib.SMTP(smtp_server) as server:
+            server.send_message(msg)
+        logging.info(f"Notification email sent to {to_email}")
+    except Exception as e:
+        logging.error(f"Failed to send email: {e}")
+
 if __name__ == "__main__":
     logging.info("Starting email scanner...")
     count = scan_emails()
@@ -346,5 +372,3 @@ if __name__ == "__main__":
     # person_data = fetch_person_details_from_api('thomas.blank@ubc.ca')
     # print(person_data["datelastbnlidupdate"])
     # print(datetime.strptime(person_data["datelastbnlidupdate"], "%Y-%m-%d").date(),  datetime.today().date())
-    
-    
