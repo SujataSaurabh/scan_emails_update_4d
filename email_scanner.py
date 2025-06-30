@@ -137,8 +137,13 @@ def scan_emails():
             subject = decode_email_subject(email_message['subject'])
             date = email_message['date']
             # convert the date to a datetime object. Remove time information, keep only date
-            date = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z")
-            date = date.date()
+            # date = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z")
+            # date = date.date()
+            # date = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z").date()
+            # get todays
+            today = datetime.today().date()
+            # print("today", today)
+            # print("date", date)
             
             # Extract name from subject
             user_name = extract_name_from_subject(subject)
@@ -151,21 +156,20 @@ def scan_emails():
             if recipient_email:
                person_data=  fetch_person_details_from_api(recipient_email)
             
-            if person_data['LBNLID'] == badge_number:
-                logging.info(f"Badge number {badge_number} matches for recipient email: {recipient_email}")
-            # validate the identity of the user
-            elif person_data['LBNLID'] != badge_number:
-                if person_data['OrgEmail'] == recipient_email and person_data['FirstName'] == user_name.split()[0] and person_data['LastName'] == user_name.split()[-1]:
-                    lbnlid  = badge_number
-                    alsid = person_data['alsid']
-                    # Insert the ALS ID and LBNL ID into the database
-                    success = insert_lbnlid_into_db_(alsid, lbnlid, date)
-                    if success:
-                        logging.info(f"Successfully inserted ALS ID {alsid} and LBNL ID {lbnlid}  for {person_data['FirstName']} {person_data['LastName']}into the database.")
-                    else:
-                        logging.error(f"Failed to insert ALS ID {alsid} and LBNL ID {lbnlid} into the database.")
-            else:
-                logging.warning(f"Identity mismatch for email: {recipient_email}. Expected: {user_name}, Found: {person_data.get('FirstName', '')} {person_data.get('LastName', '')}")
+            if datetime.strptime(person_data["datelastbnlidupdate"], "%Y-%m-%d").date() == today:
+                logging.info(f"ALS ID {person_data['alsid']} already has LBNL ID {person_data['LBNLID']} for {person_data['FirstName']} {person_data['LastName']} on {date}")
+                continue
+            elif person_data['OrgEmail'] == recipient_email and person_data['FirstName'] == user_name.split()[0] and person_data['LastName'] == user_name.split()[-1]:
+                lbnlid  = badge_number
+                alsid = person_data['alsid']
+                # Insert the ALS ID and LBNL ID into the database
+                success = insert_lbnlid_into_db_(alsid, lbnlid, today)
+                if success:
+                    logging.info(f"Successfully inserted ALS ID {alsid} and LBNL ID {lbnlid}  for {person_data['FirstName']} {person_data['LastName']}into the database.")
+                else:
+                    logging.error(f"Failed to insert ALS ID {alsid} and LBNL ID {lbnlid} into the database.")
+            # else:
+            #     logging.warning(f"Identity mismatch for email: {recipient_email}. Expected: {user_name}, Found: {person_data.get('FirstName', '')} {person_data.get('LastName', '')}")
             # Log the email details
             logging.info(f"Processing email from {email_user} with subject: {subject}")
         
@@ -282,8 +286,9 @@ def insert_lbnlid_into_db_(alsid, lbnlid, date):
         # API endpoint
         api_url = "https://alsusweb3.lbl.gov/UPDLbnlid"
         
+        security_token = os.getenv('4D_SECURITY_TOKEN')
         # Prepare the request data
-        data = {"alsid": str(alsid), "lbnlid": str(lbnlid), "date": str(date)}
+        data = {"alsid": str(alsid), "lbnlid": str(lbnlid), "date": str(date), "securitytoken": str(security_token)}
         
         
         # Set up headers for JSON request
@@ -336,7 +341,10 @@ def test_insert_lbnlid_into_db():
 if __name__ == "__main__":
     logging.info("Starting email scanner...")
     count = scan_emails()
-    # logging.info(f"Total count of matching emails: {count}")
+    logging.info(f"Total count of matching emails: {count}")
     # print(f"\nTotal count of matching emails: {count}")
+    # person_data = fetch_person_details_from_api('thomas.blank@ubc.ca')
+    # print(person_data["datelastbnlidupdate"])
+    # print(datetime.strptime(person_data["datelastbnlidupdate"], "%Y-%m-%d").date(),  datetime.today().date())
     
     
