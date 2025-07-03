@@ -141,14 +141,20 @@ def scan_emails():
             subject = decode_email_subject(email_message['subject'])
             date = email_message['date']
             # convert the date to a datetime object. Remove time information, keep only date
-            # date = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z")
-            # date = date.date()
-            # date = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z").date()
+            email_date = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z").date()
+            # remove the time information from the date
+            # date = date.replace(tzinfo=None)  # Remove timezone info if needed
+            # If the date is in string format, convert it to a date object
+            if isinstance(email_date, str):           
+                # If the date is a string, parse it to a datetime object
+                email_date = datetime.strptime(email_date, "%a, %d %b %Y %H:%M:%S %z")
+                # Convert to date object
+                email_date = email_date.date()  # Remove time information, keep only date
             # get todays
-            today = datetime.today().date()
+            # today = datetime.today().date()
             # print("today", today)
-            # print("date", date)
-            
+            print("date", email_date)
+            # break 
             # Extract name from subject
             user_name = extract_name_from_subject(subject)
 
@@ -160,20 +166,23 @@ def scan_emails():
             if recipient_email:
                person_data=  fetch_person_details_from_api(recipient_email)
 
-            datelastbnlidupdate = person_data.get("datelastbnlidupdate")
-            if not datelastbnlidupdate:
-                datelastbnlidupdate = "1960-01-01" # Set to minimum date if not found
-        
-        
+            datelastwelcomeletter = person_data.get("datelastwelcomeletter")
+            if not datelastwelcomeletter:
+                datelastwelcomeletter = "1960-01-01" # Set to minimum date if not found
+
+            print(f"setting the datelastbnlidupdate: {datelastwelcomeletter}")
             # Check if the date received is same as found in the database
-            if datetime.strptime(datelastbnlidupdate, "%Y-%m-%d").date() == today:
+            if datetime.strptime(datelastwelcomeletter, "%Y-%m-%d").date() == email_date:
+                print(f"Skipping email for {user_name} as the {datelastwelcomeletter} is same as mail date: {email_date}")
                 logging.info(f"ALS ID {person_data['alsid']} already has LBNL ID {person_data['LBNLID']} for {person_data['FirstName']} {person_data['LastName']} on {date}")
                 continue
             elif person_data['OrgEmail'] == recipient_email and person_data['FirstName'] == user_name.split()[0] and person_data['LastName'] == user_name.split()[-1]:
                 lbnlid  = badge_number
                 alsid = person_data['alsid']
                 # Insert the ALS ID and LBNL ID into the database
-                success = insert_lbnlid_into_db_(alsid, lbnlid, today)
+                success = insert_lbnlid_into_db_(alsid, lbnlid, email_date)
+                # success = True
+                print(f"Inserting ALS ID {alsid} and LBNL ID {lbnlid} into the database for {person_data['FirstName']} {person_data['LastName']}. Test completed")
                 if success:
                     logging.info(f"Successfully inserted ALS ID {alsid} and LBNL ID {lbnlid}  for {person_data['FirstName']} {person_data['LastName']}into the database.")
                 else:
@@ -291,11 +300,12 @@ def insert_lbnlid_into_db_(alsid, lbnlid, date):
         bool: True if successful, False otherwise
     """
     try:
-        # API endpoint
+        # get API endpoint
         api_url = os.getenv('prod_update_lbnlid')        
         if not api_url:
             logging.error("API URL is not set in environment variables.")
             return False
+        # get security token from environment variable
         security_token = os.getenv('4D_SECURITY_TOKEN')
         if not security_token:
             logging.error("4D Security Token is not set in environment variables.")
