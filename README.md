@@ -45,8 +45,3 @@ python email_scanner.py
   - `datetime` (built-in)
   - `python-dotenv` (for .env file support)
 
-## Security Notes
-
-- Never commit the `.env` file to version control
-- Use app passwords instead of regular passwords
-- Keep the `.env` file secure and restrict access 
