@@ -1,5 +1,6 @@
 import datetime
 from datetime import datetime
+import re
 import imaplib
 import email
 from email.header import decode_header
@@ -7,15 +8,29 @@ import os
 from dotenv import load_dotenv
 import requests
 from requests.exceptions import RequestException
+from email.utils import parsedate_to_datetime
 import logging
 import json 
 
 # Configure logging
+       
+# Get the log directory from the environment variable
+LOG_DIR = os.environ.get('LOG_DIR', '/Users/sujatagoswami/Documents/LBL/ALS/CODE/development/scan_emails_update_4d')
+LOG_FILE = os.path.join(LOG_DIR, 'scanner.log')
+
+# Configure logging to write to the file
 logging.basicConfig(
-    filename='email_scanner.log',
+    filename=LOG_FILE,
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+logging.info("Logs are being written to the file.")
+# logging.basicConfig(
+#     filename='email_scanner.log',
+#     level=logging.INFO,
+#     format='%(asctime)s - %(levelname)s - %(message)s'
+# )
 
 '''
 The script reads the emails from the LBL email account and prints the subject and date of the emails.
@@ -62,45 +77,58 @@ def extract_name_from_subject(subject):
         return None
 # 
 def extract_badge_number(email_message):
-    """Extract badge number from email body."""
+    """Extract badge number (LBNL ID) from email body."""
     try:
-        # Get email body
+        print("Extracting badge number from email body...")
+        
+        # Extract the email body as a string
+        body = ""
         if email_message.is_multipart():
             for part in email_message.walk():
-                if part.get_content_type() == "text/plain":
-                    body = part.get_payload(decode=True).decode()
+                # if part.get_content_type() == "text/plain" or part.get_content_type() == "text/html" or part.get_content_type() == "text/xml":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    body = payload.decode(errors='replace')
                     break
         else:
-            body = email_message.get_payload(decode=True).decode()
-
-        # Look for badge number in the body
-        # Assuming the badge number follows a pattern like "Badge Number: XXXXXX"
-        for line in body.splitlines():
-            if "Badge Number is " in line:
-                # try to extract the badge number from Berkeley Lab Id#
-                print(f"Processing line: {line}")
-                # badge_number = line.split(":")[-1].strip()
-                # If badge number is not found, try to extract it from the line
-                badge_number = line.split(" ")[-1].strip()
-                badge_number = badge_number.replace("*", "").replace(" ", "")
-                
-                logging.info(f"Found badge number: {badge_number}")
-                return badge_number
-
-            elif  "Berkeley Lab ID#:" in line:
-                print(f"Processing line: {line}")
-                # Extract the badge number from the line
-                badge_number = line.split(":")[-1].strip()
-                badge_number = badge_number.replace("*", "").replace(" ", "")
-                logging.info(f"Found Berkeley Lab Id#: {badge_number}")
-                return badge_number
+            payload = email_message.get_payload(decode=True)
+            if payload:
+                body = payload.decode(errors='replace')
+        
+        if not body:
+            logging.warning("Email body is empty")
+            return None
+        
+        # Define the target phrase to search for
+        search_phrase = "Your Berkeley Lab Identification Number/Badge Number is"
+        
+        # Split the entire email body into a list of individual lines
+        lines = body.splitlines()
+        print(f"Total lines in email body: {len(lines)}")
+        
+        print("Searching for the badge number line...")
+        for line in lines:
+            # Check if the search phrase is present in the current line
+            if search_phrase in line:
+                print(f"✅ Found Line: {line.strip()}")
+                # Extract the badge number using regex
+                badge_number_match = re.search(r'(\d{5,})', line)
+                if badge_number_match:
+                    badge_number = badge_number_match.group(1)
+                    print(f"Extracted Badge Number: {badge_number}")
+                    logging.info(f"Found badge number: {badge_number}")
+                    return badge_number
+                break  # Stop searching after the first match
+        
+        print("❌ Badge number line not found in the email body.")
         logging.warning("No badge number found in email body")
         return None
-
+        
     except Exception as e:
         logging.error(f"Error extracting badge number: {str(e)}")
         return None
 
+     
 
 def scan_emails():
     # Load environment variables
@@ -124,7 +152,7 @@ def scan_emails():
         mail.select('INBOX')
         logging.info("Selected the inbox.")
         # Search for emails from specific sender with specific subject
-        search_criteria = '(FROM "alsuser@lbl.gov" SUBJECT "ALS User Site Access")'
+        search_criteria = '(FROM "do-not-reply-hrsc@hsc.lbl.gov" SUBJECT "ALS User Site Access - ")'
         _, message_numbers = mail.search(None, search_criteria)
         
         # Get the count of matching emails
@@ -136,14 +164,12 @@ def scan_emails():
             _, msg_data = mail.fetch(num, '(RFC822)')
             email_body = msg_data[0][1]
             email_message = email.message_from_bytes(email_body)
-            
+            # print("email_message = ", email_message)
             # Get email details
             subject = decode_email_subject(email_message['subject'])
             date = email_message['date']
-            # convert the date to a datetime object. Remove time information, keep only date
-            email_date = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z").date()
-            # remove the time information from the date
-            # date = date.replace(tzinfo=None)  # Remove timezone info if needed
+            email_date = re.sub(r'\s*\([^)]+\)$', '', date)  
+           
             # If the date is in string format, convert it to a date object
             if isinstance(email_date, str):           
                 # If the date is a string, parse it to a datetime object
@@ -160,9 +186,12 @@ def scan_emails():
 
             # Extract badge number from body
             badge_number = extract_badge_number(email_message)
+            print(f"badge_number: {badge_number}")
 
              # Extract recipient email
             recipient_email = extract_recipient_email(email_message)
+            print(f"recipient_email: {recipient_email}")
+            person_data = {}
             if recipient_email:
                person_data=  fetch_person_details_from_api(recipient_email)
 
@@ -225,30 +254,37 @@ def scan_emails():
             logging.warning(f"Failed to close the connection: {str(e)}")
 
 def extract_recipient_email(email_message):
-    """Extract recipient's email address from the forwarded message 'To:' field."""
+    """Extract recipient's email address from the email 'To:' header field."""
     try:
-        # Get email body
-        if email_message.is_multipart():
-            for part in email_message.walk():
-                if part.get_content_type() == "text/plain":
-                    body = part.get_payload(decode=True).decode()
-                    break
-        else:
-            body = email_message.get_payload(decode=True).decode()
-
-        # Look for "To:" in the forwarded message section
-        for line in body.splitlines():
-            if line.strip().startswith("To:"):
-                print(f"Processing To line: {line}")
-                # Extract email from the To: line
-                email = line.split("To:")[-1].strip()
-                # If the format is "Name <email@domain.com>", extract just the email
-                if '<' in email and '>' in email:
-                    email = email[email.find('<')+1:email.find('>')]
-                logging.info(f"Found recipient email in forwarded message: {email}")
-                return email
+        # Get the 'To:' header directly from the email message
+        to_header = email_message.get('To')
         
-        logging.warning("No recipient email found in forwarded message")
+        if not to_header:
+            logging.warning("No 'To:' header found in email")
+            return None
+        
+        to_header = to_header.strip()
+        logging.info(f"Raw To header: {to_header}")
+        
+        # Extract email from formats like:
+        # - "email@domain.com"
+        # - "Name <email@domain.com>"
+        # - "email1@domain.com, email2@domain.com" (take first)
+        
+        # If in form "Name <email@domain>", extract between <>
+        if '<' in to_header and '>' in to_header:
+            addr = to_header[to_header.find('<')+1:to_header.find('>')].strip()
+            logging.info(f"Found recipient email from To header: {addr}")
+            return addr
+        
+        # Otherwise extract first email address
+        email_match = re.search(r'([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})', to_header)
+        if email_match:
+            addr = email_match.group(1)
+            logging.info(f"Found recipient email from To header: {addr}")
+            return addr
+        
+        logging.warning("Could not extract email from 'To:' header")
         return None
 
     except Exception as e:
