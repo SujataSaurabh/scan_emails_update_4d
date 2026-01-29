@@ -1,5 +1,5 @@
 import datetime
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import imaplib
 import email
@@ -11,11 +11,15 @@ from requests.exceptions import RequestException
 from email.utils import parsedate_to_datetime
 import logging
 import json 
-
+ 
+# load environment variables from .env file
+load_dotenv()
 # Configure logging
        
 # Get the log directory from the environment variable
-LOG_DIR = os.environ.get('LOG_DIR', '/Users/sujatagoswami/Documents/LBL/ALS/CODE/development/scan_emails_update_4d')
+# get LOG_DIR from environment variable 
+
+LOG_DIR = os.getenv('LOG_DIR')
 LOG_FILE = os.path.join(LOG_DIR, 'scanner.log')
 
 # Configure logging to write to the file
@@ -43,8 +47,7 @@ If the User Name is found and same in the email, the script will insert the alsi
 If the alsid is not found, the script will log the email body and the alsid and User Name.
 
 '''
-# load environment variables from .env file
-load_dotenv()
+
 # decode email subject from bytes to string
 # This function decodes the email subject from bytes to a string, handling different encodings.
 def decode_email_subject(subject):
@@ -148,20 +151,46 @@ def scan_emails():
         mail.login(email_user, email_password)
         logging.info("Successfully logged in to the email account.")
         
+        # Build "today only" IMAP date window
+        today = datetime.now().date()
+        tomorrow = today + timedelta(days=1)
+
+        imap_today = today.strftime("%d-%b-%Y")      # e.g. 29-Jan-2026
+        imap_tomorrow = tomorrow.strftime("%d-%b-%Y")
+
         # Select the inbox
         mail.select('INBOX')
         logging.info("Selected the inbox.")
         # Search for emails from specific sender with specific subject
-        search_criteria = '(FROM "do-not-reply-hrsc@hsc.lbl.gov" SUBJECT "ALS User Site Access - ")'
-        _, message_numbers = mail.search(None, search_criteria)
+        # search_criteria = '(FROM "do-not-reply-hrsc@hsc.lbl.gov" SUBJECT "ALS User Site Access - ")'
+        # Unread + today + sender + subject filter
+        search_criteria = (
+            f'(UNSEEN '
+            f'FROM "do-not-reply-hrsc@hsc.lbl.gov" '
+            f'SUBJECT "ALS User Site Access - " '
+            f'SINCE "{imap_today}" '
+            f'BEFORE "{imap_tomorrow}")'
+        )
+        status, message_numbers = mail.search(None, search_criteria)
+         
+        if status != "OK":
+            logging.error(f"IMAP search failed: {status}")
+            return 0
         
         # Get the count of matching emails
-        email_count = len(message_numbers[0].split())
-        logging.info(f"Found {email_count} emails matching the criteria.")
+        email_ids = message_numbers[0].split()
+        email_count = len(email_ids)
+        logging.info(f"Found {email_count} UNSEEN emails for today matching the criteria.")
+
         
         # Process each email
-        for num in message_numbers[0].split():
-            _, msg_data = mail.fetch(num, '(RFC822)')
+        # for num in message_numbers[0].split():
+        #     _, msg_data = mail.fetch(num, '(RFC822)')
+        for num in email_ids:
+            status, msg_data = mail.fetch(num, '(RFC822)')
+            if status != "OK" or not msg_data or not msg_data[0]:
+                logging.warning(f"Failed to fetch message {num}")
+                continue
             email_body = msg_data[0][1]
             email_message = email.message_from_bytes(email_body)
             # print("email_message = ", email_message)
@@ -213,6 +242,7 @@ def scan_emails():
                 # success = True
                 print(f"Inserting ALS ID {alsid} and LBNL ID {lbnlid} into the database for {person_data['FirstName']} {person_data['LastName']}. Test completed")
                 if success:
+                    mail.store(num, '+FLAGS', '\\Seen')  # Mark email as read
                     logging.info(f"Successfully inserted ALS ID {alsid} and LBNL ID {lbnlid}  for {person_data['FirstName']} {person_data['LastName']}into the database.")
                 else:
                     logging.error(f"Failed to insert ALS ID {alsid} and LBNL ID {lbnlid} into the database.")
