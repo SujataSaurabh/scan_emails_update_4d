@@ -11,7 +11,8 @@ from requests.exceptions import RequestException
 from email.utils import parsedate_to_datetime
 import logging
 import json 
- 
+import traceback
+
 # load environment variables from .env file
 load_dotenv()
 # Configure logging
@@ -52,6 +53,9 @@ If the alsid is not found, the script will log the email body and the alsid and 
 # This function decodes the email subject from bytes to a string, handling different encodings.
 def decode_email_subject(subject):
     """Decode email subject from bytes to string."""
+    if subject is None:
+        logging.warning("Email subject is missing")
+        return ""
     decoded_parts = []
     for part, encoding in decode_header(subject):
         if isinstance(part, bytes):
@@ -140,6 +144,9 @@ def scan_emails():
     # Email credentials- fetch from environment variables
     email_user = os.getenv('EMAIL_USER')
     email_password = os.getenv('EMAIL_PASSWORD')  
+    if not email_user or not email_password:
+        logging.error("EMAIL_USER or EMAIL_PASSWORD is missing; check your container env vars.")
+        return 0
     
     # Connect to the IMAP server
     imap_server = "imap.gmail.com"  # Updated to Google's IMAP server
@@ -195,16 +202,27 @@ def scan_emails():
             email_message = email.message_from_bytes(email_body)
             # print("email_message = ", email_message)
             # Get email details
-            subject = decode_email_subject(email_message['subject'])
-            date = email_message['date']
+            subject_raw = email_message.get('subject') or ""
+            subject = decode_email_subject(subject_raw)
+            date = email_message.get('date') or ""
+            
+            # Check if date is None
+            if not date:
+                logging.warning(f"Email has no date header; skipping")
+                continue
+            
             email_date = re.sub(r'\s*\([^)]+\)$', '', date)  
            
             # If the date is in string format, convert it to a date object
             if isinstance(email_date, str):           
                 # If the date is a string, parse it to a datetime object
-                email_date = datetime.strptime(email_date, "%a, %d %b %Y %H:%M:%S %z")
-                # Convert to date object
-                email_date = email_date.date()  # Remove time information, keep only date
+                try:
+                    email_date = datetime.strptime(email_date, "%a, %d %b %Y %H:%M:%S %z")
+                    # Convert to date object
+                    email_date = email_date.date()  # Remove time information, keep only date
+                except ValueError as e:
+                    logging.error(f"Failed to parse email date '{email_date}': {e}")
+                    continue
             # get todays
             # today = datetime.today().date()
             # print("today", today)
@@ -269,9 +287,9 @@ def scan_emails():
             print("-" * 50)
         
         return email_count
-    except Exception as e:
-        logging.error(f"An error occurred: {str(e)}")
-        print(f"An error occurred: {str(e)}")
+    except Exception:
+        logging.exception("An error occurred")
+        traceback.print_exc()
         return 0
         
     finally:
