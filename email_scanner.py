@@ -12,6 +12,7 @@ from email.utils import parsedate_to_datetime
 import logging
 import json 
 import traceback
+import sys
 
 # load environment variables from .env file
 load_dotenv()
@@ -20,7 +21,19 @@ load_dotenv()
 # Get the log directory from the environment variable
 # get LOG_DIR from environment variable 
 
-LOG_DIR = os.getenv('LOG_DIR')
+def is_running_in_docker():
+    return os.path.exists('/.dockerenv')
+ 
+
+if sys.platform == 'darwin':  # MacOS
+    LOG_DIR = os.getenv('LOG_DIR')
+elif is_running_in_docker():
+    LOG_DIR = os.getenv('LOG_DIR', '/var/log/email_scanner')
+
+if LOG_DIR:
+    print(f"Using LOG_DIR: {LOG_DIR}")
+    LOG_DIR = LOG_DIR.strip().strip('"').strip("'")
+os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, 'scanner.log')
 
 # Configure logging to write to the file

@@ -1,0 +1,11 @@
+services:
+  scanner:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: scan_emails_update_4d:local
+    env_file:
+      - ./scan_emails_update_4d/.env
+    environment:
+      - LOG_DIR=/var/log/email_scanner
+    restart: unless-stopped
